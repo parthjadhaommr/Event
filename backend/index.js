@@ -2,8 +2,8 @@ import express from "express";
 import cors from "cors";
 import mongoose from "mongoose";
 import multer from "multer";
+import streamifier from "streamifier";
 import { v2 as cloudinary } from "cloudinary";
-import { CloudinaryStorage } from "multer-storage-cloudinary";
 
 import { VenueModel } from "./models/venue.js";
 import { EventModel } from "./models/events.js";
@@ -20,7 +20,7 @@ const CLOUDINARY_API_SECRET = process.env.CLOUDINARY_API_SECRET;
 
 const connectDB = async () => {
     try {
-        await mongoose.connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true });
+        await mongoose.connect("mongodb+srv://ritanshu:ritanshu11@event.dvdlgpm.mongodb.net/");
         console.log("MongoDB connected");
     } catch (err) {
         console.error("MongoDB connection failed", err);
@@ -28,20 +28,15 @@ const connectDB = async () => {
     }
 };
 
+// Configure Cloudinary v2
 cloudinary.config({
     cloud_name: CLOUDINARY_CLOUD_NAME,
     api_key: CLOUDINARY_API_KEY,
     api_secret: CLOUDINARY_API_SECRET,
 });
 
-const storage = new CloudinaryStorage({
-    cloudinary,
-    params: {
-        folder: "event_images",
-        allowed_formats: ["jpg", "jpeg", "png"],
-        transformation: [{ width: 800, crop: "limit" }],
-    },
-});
+// Multer memory storage
+const storage = multer.memoryStorage();
 const parser = multer({ storage });
 
 const app = express();
@@ -49,6 +44,17 @@ app.use(cors());
 app.use(express.json());
 
 app.get("/", (req, res) => res.json({ message: "Event Management API running", status: "healthy" }));
+
+// ==================== VENUE ROUTES ====================
+app.get("/venues", async (req, res) => {
+    try {
+        const venues = await VenueModel.find().sort({ name: 1 }); // use VenueModel
+        res.status(200).json(venues);
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Failed to fetch venues" });
+    }
+});
 
 app.post("/addVenue", async (req, res) => {
     try {
@@ -60,7 +66,6 @@ app.post("/addVenue", async (req, res) => {
 });
 
 app.get("/listVenues", async (req, res) => res.json(await VenueModel.find()));
-
 app.get("/getVenue/:id", async (req, res) => {
     const v = await VenueModel.findById(req.params.id);
     if (!v) return res.status(404).json({ error: "Venue not found" });
@@ -79,11 +84,28 @@ app.delete("/deleteVenues/:id", async (req, res) => {
     res.json({ message: "Venue deleted" });
 });
 
+// ==================== EVENT ROUTES ====================
+
+// Helper: upload buffer to Cloudinary
+const uploadToCloudinary = (buffer, folder = "event_images") => {
+    return new Promise < string > ((resolve, reject) => {
+        const stream = cloudinary.uploader.upload_stream(
+            { folder },
+            (error, result) => {
+                if (result) resolve(result.secure_url);
+                else reject(error);
+            }
+        );
+        streamifier.createReadStream(buffer).pipe(stream);
+    });
+};
+
 app.post("/addEvents", parser.single("image"), async (req, res) => {
     try {
-        const eventData = { ...req.body };
-        if (req.file?.path) eventData.imageURL = req.file.path;
+        let imageURL = "";
+        if (req.file) imageURL = await uploadToCloudinary(req.file.buffer);
 
+        const eventData = { ...req.body, imageURL };
         const e = await EventModel.create(eventData);
         res.status(201).json(e);
     } catch (e) {
@@ -93,8 +115,11 @@ app.post("/addEvents", parser.single("image"), async (req, res) => {
 
 app.put("/editEvents/:id", parser.single("image"), async (req, res) => {
     try {
+        let imageURL = "";
+        if (req.file) imageURL = await uploadToCloudinary(req.file.buffer);
+
         const eventData = { ...req.body };
-        if (req.file?.path) eventData.imageURL = req.file.path;
+        if (imageURL) eventData.imageURL = imageURL;
 
         const e = await EventModel.findByIdAndUpdate(req.params.id, eventData, { new: true });
         if (!e) return res.status(404).json({ error: "Event not found" });
@@ -107,18 +132,33 @@ app.put("/editEvents/:id", parser.single("image"), async (req, res) => {
 app.get("/listEvents", async (req, res) => {
     res.json(await EventModel.find().populate("venueId").populate("userIds").populate("organizerId"));
 });
+
 app.get("/getEvents/:id", async (req, res) => {
-    const e = await EventModel.findById(req.params.id).populate("venueId").populate("userIds").populate("organizerId");
+    const e = await EventModel.findById(req.params.id)
+        .populate("venueId")
+        .populate("userIds")
+        .populate("organizerId");
     if (!e) return res.status(404).json({ error: "Event not found" });
     res.json(e);
 });
 
-app.delete("/delteEvents/:id", async (req, res) => {
-    const e = await EventModel.findByIdAndDelete(req.params.id);
-    if (!e) return res.status(404).json({ error: "Event not found" });
-    res.json({ message: "Event deleted" });
+app.delete("/deleteEvents/:id", async (req, res) => {
+    try {
+        console.log("Delete request received for ID:", req.params.id); // 👈 log here
+        const event = await EventModel.findByIdAndDelete(req.params.id);
+        if (!event) {
+            console.log("Event not found for ID:", req.params.id);
+            return res.status(404).json({ error: "Event not found" });
+        }
+        console.log("Event deleted:", event._id);
+        res.json({ success: true, deletedId: event._id });
+    } catch (err) {
+        console.error("Error deleting event:", err);
+        res.status(500).json({ error: "Failed to delete event" });
+    }
 });
 
+// Event registration
 app.post("/events/:id/register", async (req, res) => {
     const { userId } = req.body;
     const event = await EventModel.findById(req.params.id);

@@ -1,25 +1,61 @@
-import React from "react";
-import { Modal, View, Text, TextInput, TouchableOpacity, ScrollView } from "react-native";
+import React, { useEffect } from "react";
+import { Modal, View, Text, TextInput, TouchableOpacity, ScrollView, Alert } from "react-native";
 import { Controller, UseFormReturn, FieldValues } from "react-hook-form";
 
 interface VenueModalProps {
     visible: boolean;
     onClose: () => void;
     form: UseFormReturn<FieldValues>;
-    onSubmit: (data: any) => void;
+    editVenueId?: string; // optional, pass if editing
+    onSuccess?: () => void; // optional callback after successful add/update
 }
 
-const VenueModal: React.FC<VenueModalProps> = ({ visible, onClose, form, onSubmit }) => {
+const BASE_URL = "http://localhost:5000"; // backend URL
+
+const VenueModal: React.FC<VenueModalProps> = ({ visible, onClose, form, editVenueId, onSuccess }) => {
+    const { control, handleSubmit, reset } = form;
+
+    // Submit handler
+    const handleFormSubmit = async (data: any) => {
+        try {
+            const url = editVenueId ? `${BASE_URL}/updateVenues/${editVenueId}` : `${BASE_URL}/addVenue`;
+            const method = editVenueId ? "PUT" : "POST";
+
+            const res = await fetch(url, {
+                method,
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(data),
+            });
+
+            const result = await res.json();
+            if (!res.ok) throw new Error(result.error || "Something went wrong");
+
+            Alert.alert("Success", editVenueId ? "Venue updated" : "Venue added");
+            reset();        // reset form
+            onClose();      // close modal
+            onSuccess && onSuccess(); // optional callback
+        } catch (err: any) {
+            Alert.alert("Error", err.message || "Failed to submit");
+        }
+    };
+
+    // Reset form on modal close
+    useEffect(() => {
+        if (!visible) reset();
+    }, [visible]);
+
     return (
         <Modal visible={visible} animationType="slide" transparent>
             <View className="flex-1 justify-center items-center bg-black/50">
                 <View className="w-11/12 max-h-4/5 bg-white rounded-xl p-5">
-                    <Text className="text-center text-xl font-semibold mb-4">Add / Edit Venue</Text>
+                    <Text className="text-center text-xl font-semibold mb-4">
+                        {editVenueId ? "Edit Venue" : "Add Venue"}
+                    </Text>
 
                     <ScrollView showsVerticalScrollIndicator={false}>
                         {/* Name */}
                         <Controller
-                            control={form.control}
+                            control={control}
                             name="name"
                             rules={{ required: "Venue name is required" }}
                             render={({ field: { onChange, value }, fieldState: { error } }) => (
@@ -37,7 +73,7 @@ const VenueModal: React.FC<VenueModalProps> = ({ visible, onClose, form, onSubmi
 
                         {/* Address */}
                         <Controller
-                            control={form.control}
+                            control={control}
                             name="address"
                             rules={{ required: "Address is required" }}
                             render={({ field: { onChange, value }, fieldState: { error } }) => (
@@ -55,7 +91,7 @@ const VenueModal: React.FC<VenueModalProps> = ({ visible, onClose, form, onSubmi
 
                         {/* Capacity */}
                         <Controller
-                            control={form.control}
+                            control={control}
                             name="capacity"
                             rules={{
                                 required: "Capacity is required",
@@ -85,7 +121,7 @@ const VenueModal: React.FC<VenueModalProps> = ({ visible, onClose, form, onSubmi
                         </TouchableOpacity>
                         <TouchableOpacity
                             className="bg-blue-500 px-4 py-2 rounded-lg"
-                            onPress={form.handleSubmit(onSubmit)}
+                            onPress={handleSubmit(handleFormSubmit)}
                         >
                             <Text className="text-white font-semibold">Save</Text>
                         </TouchableOpacity>
